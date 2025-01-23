@@ -29,13 +29,17 @@ fn compile_shader(path: impl AsRef<Path>, comp: &mut Compiler) -> Vec<u8> {
     let module = comp.frontend.parse(&options, &glsl).unwrap();
     let info = comp.validator.validate(&module).unwrap();
     let flags = if cfg!(debug_assertions) {
+        println!("cargo::warning=Including debug labels in SPIR-V");
         WriterFlags::DEBUG
     } else {
+        println!("cargo::warning=Excluding debug labels from SPIR-V");
         WriterFlags::empty()
     };
     let check = if cfg!(debug_assertions) {
+        println!("cargo::warning=Bounds checks enabled");
         BoundsCheckPolicy::ReadZeroSkipWrite
     } else {
+        println!("cargo::warning=Bounds checks disabled");
         BoundsCheckPolicy::Unchecked
     };
     let options = naga::back::spv::Options {
@@ -49,7 +53,7 @@ fn compile_shader(path: impl AsRef<Path>, comp: &mut Compiler) -> Vec<u8> {
             image_load: check,
             binding_array: check,
         },
-        zero_initialize_workgroup_memory: ZeroInitializeWorkgroupMemoryMode::Native,
+        zero_initialize_workgroup_memory: ZeroInitializeWorkgroupMemoryMode::None,
         debug_info: cfg!(debug_assertions).then_some(DebugInfo {
             source_code: &glsl,
             file_name: path,
@@ -86,6 +90,7 @@ fn main() {
         let path = entry.path();
         match entry.file_type() {
             Ok(ft) if ft.is_file() => {
+                println!("cargo::warning=Building {}", path.display());
                 let spv = compile_shader(&path, &mut compiler);
                 let mut out = Path::new(&std::env::var_os("OUT_DIR").unwrap())
                     .join(path.file_name().unwrap());
