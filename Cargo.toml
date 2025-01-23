@@ -1,0 +1,8 @@
+[package]
+name = "sdl3engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sdl3-main = "0.4.0"
+sdl3-sys = "0.4.0"
