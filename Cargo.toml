@@ -6,3 +6,6 @@ edition = "2021"
 [dependencies]
 sdl3-main = "0.4.0"
 sdl3-sys = "0.4.0"
+
+[build-dependencies]
+naga = { version = "24.0.0", features = ["glsl-in", "spv-out"] }
