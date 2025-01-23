@@ -39,7 +39,7 @@ fn compile_shader(path: impl AsRef<Path>, comp: &mut Compiler) -> Vec<u8> {
         BoundsCheckPolicy::Unchecked
     };
     let options = naga::back::spv::Options {
-        lang_version: (1, 3),
+        lang_version: (1, 0),
         flags,
         binding_map: BindingMap::new(),
         capabilities: None,

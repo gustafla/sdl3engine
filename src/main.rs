@@ -17,10 +17,11 @@ use sdl3_sys::{
         SDL_GPUDepthStencilState, SDL_GPUDevice, SDL_GPUGraphicsPipeline,
         SDL_GPUGraphicsPipelineCreateInfo, SDL_GPUGraphicsPipelineTargetInfo,
         SDL_GPUMultisampleState, SDL_GPURasterizerState, SDL_GPUSampleCount,
-        SDL_GPUShaderCreateInfo, SDL_GPUTexture, SDL_GPUTextureFormat, SDL_GPUVertexInputState,
-        SDL_GetGPUSwapchainTextureFormat, SDL_SubmitGPUCommandBuffer,
-        SDL_WaitAndAcquireGPUSwapchainTexture, SDL_GPU_COMPAREOP_GREATER, SDL_GPU_CULLMODE_NONE,
-        SDL_GPU_FILLMODE_FILL, SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE, SDL_GPU_LOADOP_CLEAR,
+        SDL_GPUShaderCreateInfo, SDL_GPUTexture, SDL_GPUVertexInputState,
+        SDL_GetGPUSwapchainTextureFormat, SDL_ReleaseGPUGraphicsPipeline, SDL_ReleaseGPUShader,
+        SDL_SubmitGPUCommandBuffer, SDL_WaitAndAcquireGPUSwapchainTexture,
+        SDL_GPU_COMPAREOP_GREATER, SDL_GPU_CULLMODE_NONE, SDL_GPU_FILLMODE_FILL,
+        SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE, SDL_GPU_LOADOP_CLEAR,
         SDL_GPU_PRIMITIVETYPE_TRIANGLESTRIP, SDL_GPU_SHADERFORMAT_SPIRV,
         SDL_GPU_SHADERSTAGE_FRAGMENT, SDL_GPU_SHADERSTAGE_VERTEX, SDL_GPU_STOREOP_STORE,
     },
@@ -38,18 +39,7 @@ const SDL_WINDOW_WIDTH: i32 = 1280;
 const SDL_WINDOW_HEIGHT: i32 = 720;
 
 struct AppState {
-    window: NonNull<SDL_Window>,
-    device: NonNull<SDL_GPUDevice>,
     renderer: Renderer,
-}
-
-impl Drop for AppState {
-    fn drop(&mut self) {
-        unsafe {
-            SDL_DestroyGPUDevice(self.device.as_mut());
-            SDL_DestroyWindow(self.window.as_mut());
-        }
-    }
 }
 
 unsafe impl Send for AppState {}
@@ -64,12 +54,16 @@ impl AppState {
 }
 
 struct Renderer {
+    window: NonNull<SDL_Window>,
+    device: NonNull<SDL_GPUDevice>,
     pipeline: NonNull<SDL_GPUGraphicsPipeline>,
 }
 
 impl Renderer {
-    fn new(device: *mut SDL_GPUDevice, window_format: SDL_GPUTextureFormat) -> Option<Self> {
-        unsafe {
+    fn new(mut device: NonNull<SDL_GPUDevice>, mut window: NonNull<SDL_Window>) -> Option<Self> {
+        let pipeline = unsafe {
+            let device = device.as_mut();
+            let window = window.as_mut();
             let mut shadercreateinfo = SDL_GPUShaderCreateInfo {
                 entrypoint: c"main".as_ptr(),
                 format: SDL_GPU_SHADERFORMAT_SPIRV,
@@ -80,14 +74,15 @@ impl Renderer {
             let vert = include_bytes!(concat!(env!("OUT_DIR"), "/quad.vert.spv"));
             shadercreateinfo.code_size = vert.len();
             shadercreateinfo.code = vert.as_ptr();
-            let vertex_shader = NonNull::new(SDL_CreateGPUShader(device, &shadercreateinfo))?;
+            let mut vertex_shader = NonNull::new(SDL_CreateGPUShader(device, &shadercreateinfo))?;
 
             let frag = include_bytes!(concat!(env!("OUT_DIR"), "/test.frag.spv"));
             shadercreateinfo.code_size = frag.len();
             shadercreateinfo.code = frag.as_ptr();
             shadercreateinfo.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
-            let fragment_shader = NonNull::new(SDL_CreateGPUShader(device, &shadercreateinfo))?;
+            let mut fragment_shader = NonNull::new(SDL_CreateGPUShader(device, &shadercreateinfo))?;
 
+            let window_format = SDL_GetGPUSwapchainTextureFormat(device, window);
             let createinfo = SDL_GPUGraphicsPipelineCreateInfo {
                 vertex_shader: vertex_shader.as_ptr(),
                 fragment_shader: fragment_shader.as_ptr(),
@@ -104,7 +99,7 @@ impl Renderer {
                     ..Default::default()
                 },
                 multisample_state: SDL_GPUMultisampleState {
-                    sample_count: SDL_GPUSampleCount(1),
+                    sample_count: SDL_GPUSampleCount::_1,
                     enable_mask: false,
                     ..Default::default()
                 },
@@ -127,12 +122,23 @@ impl Renderer {
             };
             let pipeline = NonNull::new(SDL_CreateGPUGraphicsPipeline(device, &createinfo))?;
 
-            Some(Self { pipeline })
-        }
+            SDL_ReleaseGPUShader(device, fragment_shader.as_mut());
+            SDL_ReleaseGPUShader(device, vertex_shader.as_mut());
+
+            pipeline
+        };
+
+        Some(Self {
+            window,
+            device,
+            pipeline,
+        })
     }
 
-    fn render(&mut self, device: *mut SDL_GPUDevice, window: *mut SDL_Window) -> Option<()> {
+    fn render(&mut self) -> Option<()> {
         unsafe {
+            let device = self.device.as_mut();
+            let window = self.window.as_mut();
             let mut cmdbuf = NonNull::new(SDL_AcquireGPUCommandBuffer(device))?;
             let mut swapchain_texture: *mut SDL_GPUTexture = ptr::null_mut();
             if !SDL_WaitAndAcquireGPUSwapchainTexture(
@@ -174,16 +180,22 @@ impl Renderer {
     }
 }
 
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        unsafe {
+            let device = self.device.as_mut();
+            SDL_ReleaseGPUGraphicsPipeline(device, self.pipeline.as_mut());
+            SDL_DestroyGPUDevice(device);
+            SDL_DestroyWindow(self.window.as_mut());
+        }
+    }
+}
+
 #[app_iterate]
 fn app_iterate(app: &mut AppState) -> AppResult {
-    //let ctx = &mut app.ctx;
-    unsafe {
-        let device = app.device.as_mut();
-        let window = app.window.as_mut();
-        match app.renderer.render(device, window) {
-            Some(_) => AppResult::Continue,
-            None => AppResult::Failure,
-        }
+    match app.renderer.render() {
+        Some(_) => AppResult::Continue,
+        None => AppResult::Failure,
     }
 }
 
@@ -233,14 +245,9 @@ fn app_init() -> Option<Box<Mutex<AppState>>> {
 
         SDL_ClaimWindowForGPUDevice(device.as_mut(), window.as_mut());
 
-        let window_format = SDL_GetGPUSwapchainTextureFormat(device.as_mut(), window.as_mut());
-        let renderer = Renderer::new(device.as_mut(), window_format)?;
+        let renderer = Renderer::new(device, window)?;
 
-        Some(Box::new(Mutex::new(AppState {
-            window,
-            device,
-            renderer,
-        })))
+        Some(Box::new(Mutex::new(AppState { renderer })))
     }
 }
 
