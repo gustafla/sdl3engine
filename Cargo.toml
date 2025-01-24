@@ -4,8 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+glam = { version = "0.29.2", features = [
+  "bytemuck",
+  "rand",
+  "fast-math",
+  "debug-glam-assert",
+] }
+gltf = "1.4.1"
+rand = "0.8.5"
+rand_xoshiro = "0.6.0"
 sdl3-main = "0.4.0"
-sdl3-sys = "0.4.0"
+sdl3-sys = { version = "0.4.0", features = [
+  "build-from-source-static",
+  "link-static",
+] }
 
 [build-dependencies]
 naga = { version = "24.0.0", features = ["glsl-in", "spv-out"] }
