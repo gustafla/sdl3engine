@@ -84,16 +84,16 @@ impl Renderer {
             shadercreateinfo.code_size = vert.len();
             shadercreateinfo.code = vert.as_ptr();
             let mut vertex_shader = NonNull::new(SDL_CreateGPUShader(device, &shadercreateinfo))
-                .context("Can't create vertex shader")
-                .with_context(sdl_error)?;
+                .with_context(sdl_error)
+                .context("Can't create vertex shader")?;
 
             let frag = include_bytes!(concat!(env!("OUT_DIR"), "/test.frag.spv"));
             shadercreateinfo.code_size = frag.len();
             shadercreateinfo.code = frag.as_ptr();
             shadercreateinfo.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
             let mut fragment_shader = NonNull::new(SDL_CreateGPUShader(device, &shadercreateinfo))
-                .context("Can't create fragment shader")
-                .with_context(sdl_error)?;
+                .with_context(sdl_error)
+                .context("Can't create fragment shader")?;
 
             let window_format = SDL_GetGPUSwapchainTextureFormat(device, window);
             let createinfo = SDL_GPUGraphicsPipelineCreateInfo {
@@ -134,8 +134,8 @@ impl Renderer {
                 props: 0,
             };
             let pipeline = NonNull::new(SDL_CreateGPUGraphicsPipeline(device, &createinfo))
-                .context("Can't create graphics pipeline")
-                .with_context(sdl_error)?;
+                .with_context(sdl_error)
+                .context("Can't create graphics pipeline")?;
 
             SDL_ReleaseGPUShader(device, fragment_shader.as_mut());
             SDL_ReleaseGPUShader(device, vertex_shader.as_mut());
@@ -156,8 +156,8 @@ impl Renderer {
             let window = self.window.as_mut();
 
             let mut cmdbuf = NonNull::new(SDL_AcquireGPUCommandBuffer(device))
-                .context("Couldn't acquire command buffer")
-                .with_context(sdl_error)?;
+                .with_context(sdl_error)
+                .context("Couldn't acquire command buffer")?;
 
             let mut swapchain_texture: *mut SDL_GPUTexture = ptr::null_mut();
             SDL_WaitAndAcquireGPUSwapchainTexture(
@@ -168,14 +168,14 @@ impl Renderer {
                 ptr::null_mut(),
             )
             .then_some(())
-            .context("Swapchain texture acquisition failed")
-            .with_context(sdl_error)?;
+            .with_context(sdl_error)
+            .context("Swapchain texture acquisition failed")?;
             if swapchain_texture.is_null() {
                 SDL_CancelGPUCommandBuffer(cmdbuf.as_mut())
                     .then_some(())
+                    .with_context(sdl_error)
                     .context("No swapchain texture available")
-                    .context("...But cancelling acquired command buffer failed")
-                    .with_context(sdl_error)?;
+                    .context("Cancelling acquired command buffer failed")?;
                 return Ok(());
             }
 
@@ -203,8 +203,8 @@ impl Renderer {
 
             SDL_SubmitGPUCommandBuffer(cmdbuf.as_mut())
                 .then_some(())
-                .context("Command buffer submission failed")
-                .with_context(sdl_error)?;
+                .with_context(sdl_error)
+                .context("Command buffer submission failed")?;
 
             Ok(())
         }
@@ -240,8 +240,8 @@ fn init() -> Result<AppState> {
             c"tech.mehu.engine".as_ptr(),
         )
         .then_some(())
-        .context("Could not set metadata")
-        .with_context(sdl_error)?;
+        .with_context(sdl_error)
+        .context("Could not set metadata")?;
 
         const EXTENDED_METADATA: &[(*const c_char, *const c_char)] = &[
             (
@@ -256,14 +256,14 @@ fn init() -> Result<AppState> {
         for (key, value) in EXTENDED_METADATA.iter().copied() {
             SDL_SetAppMetadataProperty(key, value)
                 .then_some(())
-                .context("Could not set extended metadata")
-                .with_context(sdl_error)?;
+                .with_context(sdl_error)
+                .context("Could not set extended metadata")?;
         }
 
         SDL_Init(SDL_INIT_VIDEO)
             .then_some(())
-            .context("SDL_Init failed")
-            .with_context(sdl_error)?;
+            .with_context(sdl_error)
+            .context("SDL_Init failed")?;
 
         let mut window = NonNull::new(SDL_CreateWindow(
             c"Mehu Demo".as_ptr(),
@@ -271,21 +271,21 @@ fn init() -> Result<AppState> {
             SDL_WINDOW_HEIGHT,
             0,
         ))
-        .context("Can't create window")
-        .with_context(sdl_error)?;
+        .with_context(sdl_error)
+        .context("Can't create window")?;
 
         let mut device = NonNull::new(SDL_CreateGPUDevice(
             SDL_GPU_SHADERFORMAT_SPIRV,
             cfg!(debug_assertions),
             ptr::null(),
         ))
-        .context("Can't create GPU device")
-        .with_context(sdl_error)?;
+        .with_context(sdl_error)
+        .context("Can't create GPU device")?;
 
         SDL_ClaimWindowForGPUDevice(device.as_mut(), window.as_mut())
             .then_some(())
-            .context("Failed to claim window for GPU device")
-            .with_context(sdl_error)?;
+            .with_context(sdl_error)
+            .context("Failed to claim window for GPU device")?;
 
         let renderer = Renderer::new(device, window)?;
         Ok(AppState { renderer })
