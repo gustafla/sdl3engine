@@ -1,10 +1,14 @@
 use std::{
     ffi::{c_char, CStr},
+    fs,
+    io::Read,
+    os::unix::ffi::OsStrExt,
+    path::{Path, PathBuf},
     ptr::{self, NonNull},
     sync::Mutex,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 
 use sdl3_main::{app_event, app_init, app_iterate, app_quit, AppResult};
 
@@ -20,11 +24,11 @@ use sdl3_sys::{
         SDL_GPUColorTargetDescription, SDL_GPUColorTargetInfo, SDL_GPUDepthStencilState,
         SDL_GPUDevice, SDL_GPUGraphicsPipeline, SDL_GPUGraphicsPipelineCreateInfo,
         SDL_GPUGraphicsPipelineTargetInfo, SDL_GPUMultisampleState, SDL_GPURasterizerState,
-        SDL_GPUSampleCount, SDL_GPUShaderCreateInfo, SDL_GPUTexture, SDL_GPUVertexInputState,
-        SDL_GetGPUSwapchainTextureFormat, SDL_ReleaseGPUGraphicsPipeline, SDL_ReleaseGPUShader,
-        SDL_SubmitGPUCommandBuffer, SDL_WaitAndAcquireGPUSwapchainTexture,
-        SDL_GPU_COMPAREOP_GREATER, SDL_GPU_CULLMODE_NONE, SDL_GPU_FILLMODE_FILL,
-        SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE, SDL_GPU_LOADOP_CLEAR,
+        SDL_GPUSampleCount, SDL_GPUShader, SDL_GPUShaderCreateInfo, SDL_GPUShaderStage,
+        SDL_GPUTexture, SDL_GPUVertexInputState, SDL_GetGPUSwapchainTextureFormat,
+        SDL_ReleaseGPUGraphicsPipeline, SDL_ReleaseGPUShader, SDL_SubmitGPUCommandBuffer,
+        SDL_WaitAndAcquireGPUSwapchainTexture, SDL_GPU_COMPAREOP_GREATER, SDL_GPU_CULLMODE_NONE,
+        SDL_GPU_FILLMODE_FILL, SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE, SDL_GPU_LOADOP_CLEAR,
         SDL_GPU_PRIMITIVETYPE_TRIANGLESTRIP, SDL_GPU_SHADERFORMAT_SPIRV,
         SDL_GPU_SHADERSTAGE_FRAGMENT, SDL_GPU_SHADERSTAGE_VERTEX, SDL_GPU_STOREOP_STORE,
     },
@@ -40,6 +44,8 @@ use sdl3_sys::{
 
 const SDL_WINDOW_WIDTH: i32 = 1280;
 const SDL_WINDOW_HEIGHT: i32 = 720;
+const RESOURCE_DIR: &str = "data";
+const SHADER_DIR: &str = "shaders";
 
 fn sdl_error() -> String {
     unsafe { CStr::from_ptr(SDL_GetError()) }
@@ -69,30 +75,72 @@ struct Renderer {
 }
 
 impl Renderer {
+    fn infer_shader_stage(filename: impl AsRef<Path>) -> Result<SDL_GPUShaderStage> {
+        let filename = filename.as_ref();
+        match filename
+            .file_stem()
+            .and_then(|s| Path::new(s).extension())
+            .map(|s| s.as_bytes())
+        {
+            Some(b"vert") => Ok(SDL_GPU_SHADERSTAGE_VERTEX),
+            Some(b"frag") => Ok(SDL_GPU_SHADERSTAGE_FRAGMENT),
+            _ => Err(anyhow!(
+                "Can't infer shader stage from {}",
+                filename.display()
+            )),
+        }
+    }
+
+    fn load_shader(
+        device: *mut SDL_GPUDevice,
+        filename: impl AsRef<Path>,
+    ) -> Result<NonNull<SDL_GPUShader>> {
+        let filename = filename.as_ref();
+        let path = if cfg!(debug_assertions) {
+            PathBuf::from(env!("OUT_DIR"))
+        } else {
+            Path::new(RESOURCE_DIR).join(SHADER_DIR)
+        }
+        .join(filename);
+
+        let mut buf = Vec::with_capacity(4096);
+        fs::File::open(&path)
+            .with_context(|| format!("Can't open {}", path.display()))?
+            .read_to_end(&mut buf)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+
+        unsafe {
+            let shadercreateinfo = SDL_GPUShaderCreateInfo {
+                entrypoint: c"main".as_ptr(),
+                format: SDL_GPU_SHADERFORMAT_SPIRV,
+                stage: Self::infer_shader_stage(filename)?,
+                code_size: buf.len(),
+                code: buf.as_ptr(),
+                ..Default::default()
+            };
+
+            let shader = NonNull::new(SDL_CreateGPUShader(device, &shadercreateinfo))
+                .with_context(sdl_error)
+                .with_context(|| {
+                    format!(
+                        "SDL_CreateGPUShader failed when loading {}",
+                        filename.display()
+                    )
+                })?;
+
+            Ok(shader)
+        }
+    }
+
     fn new(mut device: NonNull<SDL_GPUDevice>, mut window: NonNull<SDL_Window>) -> Result<Self> {
         let pipeline = unsafe {
             let device = device.as_mut();
             let window = window.as_mut();
-            let mut shadercreateinfo = SDL_GPUShaderCreateInfo {
-                entrypoint: c"main".as_ptr(),
-                format: SDL_GPU_SHADERFORMAT_SPIRV,
-                stage: SDL_GPU_SHADERSTAGE_VERTEX,
-                ..Default::default()
-            };
 
-            let vert = include_bytes!(concat!(env!("OUT_DIR"), "/quad.vert.spv"));
-            shadercreateinfo.code_size = vert.len();
-            shadercreateinfo.code = vert.as_ptr();
-            let mut vertex_shader = NonNull::new(SDL_CreateGPUShader(device, &shadercreateinfo))
-                .with_context(sdl_error)
-                .context("Can't create vertex shader")?;
+            let mut vertex_shader =
+                Self::load_shader(device, "quad.vert.spv").context("Can't create vertex shader")?;
 
-            let frag = include_bytes!(concat!(env!("OUT_DIR"), "/test.frag.spv"));
-            shadercreateinfo.code_size = frag.len();
-            shadercreateinfo.code = frag.as_ptr();
-            shadercreateinfo.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
-            let mut fragment_shader = NonNull::new(SDL_CreateGPUShader(device, &shadercreateinfo))
-                .with_context(sdl_error)
+            let mut fragment_shader = Self::load_shader(device, "test.frag.spv")
                 .context("Can't create fragment shader")?;
 
             let window_format = SDL_GetGPUSwapchainTextureFormat(device, window);

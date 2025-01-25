@@ -1,4 +1,7 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use naga::{
     back::spv::{
@@ -9,6 +12,9 @@ use naga::{
     valid::{Capabilities, ValidationFlags, Validator},
     ShaderStage,
 };
+
+const SHADER_DIR: &str = "shaders";
+const RESOURCE_DIR: &str = "data";
 
 struct Compiler {
     frontend: Frontend,
@@ -73,7 +79,7 @@ fn compile_shader(path: impl AsRef<Path>, comp: &mut Compiler) -> Vec<u8> {
 }
 
 fn main() {
-    println!("cargo::rerun-if-changed=shaders");
+    println!("cargo::rerun-if-changed={SHADER_DIR}");
 
     let flags = ValidationFlags::all();
     let capabilities = Capabilities::all();
@@ -83,18 +89,30 @@ fn main() {
         validator: Validator::new(flags, capabilities),
     };
 
-    let shaders = fs::read_dir("shaders").unwrap();
+    let root_path = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+
+    let Ok(shaders) = fs::read_dir(root_path.join(SHADER_DIR)) else {
+        println!("cargo::warning={SHADER_DIR} unavailable");
+        return;
+    };
+
     for entry in shaders.flatten() {
         let path = entry.path();
         match entry.file_type() {
             Ok(ft) if ft.is_file() => {
                 let spv = compile_shader(&path, &mut compiler);
-                let mut out = Path::new(&std::env::var_os("OUT_DIR").unwrap())
-                    .join(path.file_name().unwrap());
+                let out_dir = if cfg!(debug_assertions) {
+                    // Never output debug builds to resource dir
+                    PathBuf::from(std::env::var_os("OUT_DIR").unwrap())
+                } else {
+                    root_path.join(RESOURCE_DIR).join(SHADER_DIR)
+                };
+                fs::create_dir_all(&out_dir).ok();
+                let mut out_file = out_dir.join(path.file_name().unwrap());
                 let mut extension = path.extension().unwrap().to_os_string();
                 extension.push(".spv");
-                assert!(out.set_extension(extension));
-                fs::write(out, spv).unwrap();
+                assert!(out_file.set_extension(extension));
+                fs::write(out_file, spv).unwrap();
             }
             _ => eprintln!("Skipping {}, not a regular file", path.display()),
         }
